@@ -1,0 +1,22 @@
+
+
+	Things to do before release:
+
+	- merge with latest nginx release;
+
+
+
+
+
+
+
+	Someday or never, just some ideas to consider:
+
+	- perl_server block for arbitrary tcp servers, not just http:
+
+	  perl_server {
+	      listen  55555;
+	      perl_accept  My::accept_handler;
+	  }
+
+

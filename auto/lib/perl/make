@@ -1,0 +1,43 @@
+
+# Copyright (C) Igor Sysoev, Alexandr Gomoliako
+
+
+cat << END                                                    >> $NGX_MAKEFILE
+
+$NGX_OBJS/src/http/modules/perl/blib/arch/auto/Nginx/Nginx.so:		\
+		src/http/modules/perl/Nginx.pm				\
+		src/http/modules/perl/Nginx.xs				\
+		src/http/modules/perl/ngx_http_perl_module.h		\
+		$NGX_OBJS/src/http/modules/perl/Makefile
+	cp -p src/http/modules/perl/Nginx.xs $NGX_OBJS/src/http/modules/perl/
+	cp -p src/http/modules/perl/*.pm $NGX_OBJS/src/http/modules/perl/
+
+	cd $NGX_OBJS/src/http/modules/perl && make
+
+	rm -rf $NGX_OBJS/install_perl
+
+
+$NGX_OBJS/src/http/modules/perl/Makefile:				\
+		src/http/modules/perl/Makefile.PL			\
+		src/http/modules/perl/Nginx.pm				\
+		src/http/modules/perl/Util.pm				\
+		src/http/modules/perl/Redis.pm				\
+		src/http/modules/perl/Test.pm				\
+		src/http/modules/perl/Perl.pm
+	cp -p src/http/modules/perl/Nginx.xs $NGX_OBJS/src/http/modules/perl/
+	cp -p src/http/modules/perl/*.pm $NGX_OBJS/src/http/modules/perl/
+	cp -p src/http/modules/perl/typemap $NGX_OBJS/src/http/modules/perl/
+	cp -p src/http/modules/perl/Makefile.PL $NGX_OBJS/src/http/modules/perl/
+
+	cd $NGX_OBJS/src/http/modules/perl				\
+		&& NGX_PM_CFLAGS="\$(NGX_PM_CFLAGS) -g $NGX_CC_OPT"	\
+			NGX_PCRE=$PCRE					\
+			NGX_OBJS=$NGX_OBJS				\
+		$NGX_PERL Makefile.PL					\
+			LIB=$NGX_PERL_MODULES				\
+			INSTALLSITEMAN3DIR=$NGX_PERL_MODULES_MAN
+
+test:
+	PERL_DL_NONLAZY=1 $NGX_PERL "-MExtUtils::Command::MM" "-e" "test_harness(0, '$NGX_OBJS/src/http/modules/perl/blib/lib', '$NGX_OBJS/src/http/modules/perl/blib/arch')" t/*.t
+
+END
