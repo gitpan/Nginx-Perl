@@ -14,14 +14,15 @@ $NGX_OBJS/src/http/modules/perl/blib/arch/auto/Nginx/Nginx.so:		\
 
 	cd $NGX_OBJS/src/http/modules/perl && make
 
+	rm -rf blib/
+	cp -rp $NGX_OBJS/src/http/modules/perl/blib ./
+
 	rm -rf $NGX_OBJS/install_perl
 
 
 $NGX_OBJS/src/http/modules/perl/Makefile:				\
 		src/http/modules/perl/Makefile.PL			\
 		src/http/modules/perl/Nginx.pm				\
-		src/http/modules/perl/Util.pm				\
-		src/http/modules/perl/Redis.pm				\
 		src/http/modules/perl/Test.pm				\
 		src/http/modules/perl/Perl.pm
 	cp -p src/http/modules/perl/Nginx.xs $NGX_OBJS/src/http/modules/perl/
@@ -38,6 +39,6 @@ $NGX_OBJS/src/http/modules/perl/Makefile:				\
 			INSTALLSITEMAN3DIR=$NGX_PERL_MODULES_MAN
 
 test:
-	PERL_DL_NONLAZY=1 $NGX_PERL "-MExtUtils::Command::MM" "-e" "test_harness(0, '$NGX_OBJS/src/http/modules/perl/blib/lib', '$NGX_OBJS/src/http/modules/perl/blib/arch')" t/*.t
+	PERL_DL_NONLAZY=1 $NGX_PERL "-MExtUtils::Command::MM" "-e" "test_harness(0, 'blib/lib', 'blib/arch')" t/*.t
 
 END

@@ -6,7 +6,7 @@ no  warnings 'uninitialized';
 
 require Exporter;
 our @ISA       = qw(Exporter);
-our $VERSION   = '1.1.11.1';
+our $VERSION   = '1.1.13.1';
 our @EXPORT    = qw( 
 
     find_nginx_perl
@@ -18,6 +18,7 @@ our @EXPORT    = qw(
     fork_nginx_die
     fork_child_die
     http_get
+    get_nginx_incs
     fork_nginx_handler_die
 
 );
@@ -32,8 +33,37 @@ $Nginx::Test::PARENT = 1;
 
 sub find_nginx_perl () {
 
-    foreach ( './objs/nginx-perl',
-              "$Config{'scriptdir'}/nginx-perl",
+    foreach ( './objs/nginx-perl' ) {
+
+        return $_ 
+              if  -f $_ && 
+                  -x $_;
+    }
+
+
+    # Assuming @INC contains .../Nginx-Perl-N.N.N.N/blib/lib
+    # it might have objs/nginx-perl there somewhere
+
+    foreach my $inc ( @INC ) {
+
+        local $_ = $inc;
+
+        s!/+blib/+lib/*$!!;
+        s!/+blib/+arch/*$!!;
+
+        if ( -f "$_/objs/nginx-perl" &&
+             -x "$_/objs/nginx-perl"    ) {
+
+            my $x = "$_/objs/nginx-perl";
+
+            $x = "./$x"  unless $x =~ m!^/|^\./!; 
+
+            return $x;
+        }
+    }
+
+
+    foreach ( "$Config{'scriptdir'}/nginx-perl",
               "$Config{'sitescript'}/nginx-perl",
               "$Config{'vendorscript'}/nginx-perl",
               "$Config{'installscript'}/nginx-perl",
@@ -309,11 +339,29 @@ sub http_get ($$$) {
 }
 
 
+sub get_nginx_incs ($$) {
+    my ($nginx, $path) = @_;
+    my $prefix = '';
+
+    if ($path !~ m!^/!) {
+        $path =~ s!/+$!!;
+        $prefix = join '/', map { '..' } split /\/+/, $path;
+    }
+    
+    return map {  m!^/! ? $_ : "$prefix/$_"  } 
+             ('blib/lib', 'blib/arch', @INC);
+}
+
+
 sub fork_nginx_handler_die ($$$$) {
     my ($nginx, $path, $conf, $code) = @_;
 
     my $port = get_unused_port
         or die "Cannot get unused port";
+
+    my $incs = join "\n", 
+                 map { "perl_inc \"$_\";" } 
+                   get_nginx_incs ($nginx, $path);
 
     prepare_nginx_dir_die $path, <<"    ENDCONF", <<"    ENDPKG";
 
@@ -330,15 +378,7 @@ sub fork_nginx_handler_die ($$$$) {
         http {
             default_type  text/plain;
 
-            perl_inc  ../../../blib/lib;
-            perl_inc  ../../../blib/arch;
-            perl_inc  ../../blib/lib;
-            perl_inc  ../../blib/arch;
-            perl_inc  ../blib/lib;
-            perl_inc  ../blib/arch;
-
-            perl_inc  ../../objs/src/http/modules/perl/blib/lib;
-            perl_inc  ../../objs/src/http/modules/perl/blib/arch;
+$incs
 
             perl_inc  lib;
             perl_inc  ../lib;
@@ -473,16 +513,14 @@ as a dependency for you module and use.
 
 =head1 FUNCTIONS
 
-=over 4
-
-=item $nginx = find_nginx_perl ();
+=head3 C<< $nginx = find_nginx_perl (); >>
 
 Finds executable F<nginx-perl> binary to run. Returns C<undef> if
 can't find any or executable path otherwise. 
 
     $nginx = './objs/nginx-perl'
 
-=item %CONFARGS = get_nginx_conf_args_dir $nginx;
+=head3 C<< %CONFARGS = get_nginx_conf_args_dir $nginx; >>
 
 Runs C<nginx-perl -V> and parses its output to produce set
 of keys out of the list of configure arguments:
@@ -490,12 +528,12 @@ of keys out of the list of configure arguments:
     %CONFARGS = ( '--with-http_ssl_module' => 1,
                   '--with-...'             => 1  )
 
-=item $port = get_unused_port ();
+=head3 C<< $port = get_unused_port (); >>
 
 Gives you available port number to bind to. Tries to use it first.
 Returns undef on error.
 
-=item $rv = wait_for_peer "$host:$port", $timeout;
+=head3 C<< $rv = wait_for_peer "$host:$port", $timeout; >>
 
 Tries to connect to C<$host:$port> within $timeout. Returns C<1>
 on success and C<undef> on error.
@@ -503,7 +541,7 @@ on success and C<undef> on error.
     wait_for_peer "127.0.0.1:1234", 2
         or ...;
 
-=item prepare_nginx_dir_die $dir, $conf, $package1, $package2, ...;
+=head3 C<< prepare_nginx_dir_die $dir, $conf, $package1, $package2, ...; >>
 
 Creates directory tree suitable to run F<nginx-perl> from. Puts there 
 config and packages specified as string scalars. Dies on errors.
@@ -534,7 +572,7 @@ config and packages specified as string scalars. Dies on errors.
     
     ENDONETWO
 
-=item $text = cat_nginx_logs $dir;
+=head3 C<< $text = cat_nginx_logs $dir; >>
 
 Scans C<$dir> for logs and concatenates them into a single scalar.
 Useful for diagnostics.
@@ -545,7 +583,7 @@ Useful for diagnostics.
     ok $foo, "bar", "foo is bar"
         or diag cat_nginx_logs $dir;
 
-=item $child = fork_nginx_die $nginx, $dir;
+=head3 C<< $child = fork_nginx_die $nginx, $dir; >>
 
 Forks F<nginx-perl> using executable binary from C<$nginx> and 
 prepared directory path from C<$dir>. Dies on errors.
@@ -556,7 +594,7 @@ Internally does something like this: C<"$nginx -p $dir">
      
     undef $child;
 
-=item $child = fork_child_die sub { ... };
+=head3 C<< $child = fork_child_die sub { ... }; >>
 
 Forks sub in a child process. Dies on errors.
 
@@ -569,7 +607,11 @@ Forks sub in a child process. Dies on errors.
      
     undef $child;
 
-=item ($child, $peer) = fork_nginx_handler_dir $nginx, $dir, $conf, $code;
+=head3 C<< @incs = get_nginx_incs $nginx, $dir; >>
+
+Generates proper C<@INC> to use in F<nginx-perl.conf> during tests.
+
+=head3 C<< ($child, $peer) = fork_nginx_handler_dir $nginx, $dir, $conf, $code; >>
 
 Gets unused port, prepares directory for nginx with predefined 
 package name, forks nginx and gives you child object and peer back.
@@ -601,7 +643,7 @@ C<$dir> to be relative to the current directory or any of its subdirectories,
 i.e. F<foo>, F<foo/bar>. And also expects F<blib/lib> and F<blib/arch>
 to contain your libraries, which is where L<ExtUtils::MakeMaker> puts them.
 
-=item ($body, $headers) = http_get $peer, $uri, $timeout;
+=head3 C<< ($body, $headers) = http_get $peer, $uri, $timeout; >>
 
 Connects to C<$peer>, sends GET request and return C<$body> and C<$headers>.
 
@@ -613,8 +655,6 @@ Connects to C<$peer>, sends GET request and return C<$body> and C<$headers>.
                   content-type   => ['text/html'],
                   content-length => [1234],
                   ...                               }
-
-=back
 
 =head1 AUTHOR
 

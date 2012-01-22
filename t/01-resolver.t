@@ -6,16 +6,13 @@ use strict;
 use warnings;
 no  warnings 'uninitialized';
 
-# we don't have blib here
-use lib 'objs/src/http/modules/perl/blib/lib', 
-        'objs/src/http/modules/perl/blib/arch';
-
 use Data::Dumper;
 use Test::More;
 use Nginx::Test;
+use Socket;
 
 my $nginx = find_nginx_perl;
-my $dir   = "objs/tests";
+my $dir   = "objs/t01";
 
 plan skip_all => "Can't find executable binary ($nginx) to test"
         if  !$nginx    ||  
@@ -36,6 +33,15 @@ $ns = '8.8.8.8'
 
 wait_for_peer "$ns:53", 1
     or  plan skip_all => "Cannot connect to $ns:53";
+
+
+# making sure we can successfully 
+# connect to remote hosts  
+
+my $ip = inet_ntoa (inet_aton ("www.google.com"));
+
+wait_for_peer "$ip:80", 1
+    or  plan skip_all => "Cannot connect to $ip:80";
 
 
 

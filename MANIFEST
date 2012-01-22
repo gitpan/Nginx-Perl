@@ -1,6 +1,6 @@
 CHANGES
 t
-t/03-redis.t
+t/05-functions.t
 t/00-basic.t
 t/01-resolver.t
 t/02-ssl_handshaker.t
@@ -86,10 +86,8 @@ src/http/modules
 src/http/modules/perl
 src/http/modules/perl/Perl.pm
 src/http/modules/perl/ngx_http_perl_module.h
-src/http/modules/perl/Util.pm
 src/http/modules/perl/Nginx.xs
 src/http/modules/perl/Nginx.pm
-src/http/modules/perl/Redis.pm
 src/http/modules/perl/ngx_http_perl_module.c
 src/http/modules/perl/Makefile.PL
 src/http/modules/perl/Test.pm
@@ -288,14 +286,6 @@ eg/helloworld/conf
 eg/helloworld/conf/nginx-perl.conf
 eg/helloworld/lib
 eg/helloworld/lib/Helloworld.pm
-eg/redis
-eg/redis/logs
-eg/redis/logs/.exists
-eg/redis/conf
-eg/redis/conf/nginx-perl.conf
-eg/redis/lib
-eg/redis/lib/Redis.pm
-eg/redis.js
 eg/self-sufficient
 eg/self-sufficient/logs
 eg/self-sufficient/logs/.exists

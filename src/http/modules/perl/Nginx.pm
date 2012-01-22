@@ -7,8 +7,10 @@ require Exporter;
 our @ISA    = qw(Exporter);
 our @EXPORT = qw(
 
+    ngx_escape_uri
     ngx_prefix
     ngx_conf_prefix
+
     ngx_log_error
     ngx_log_notice
     ngx_log_info
@@ -52,6 +54,13 @@ our @EXPORT = qw(
     NGX_OK
     NGX_HTTP_LAST
 
+    NGX_ESCAPE_URI
+    NGX_ESCAPE_ARGS
+    NGX_ESCAPE_URI_COMPONENT
+    NGX_ESCAPE_HTML
+    NGX_ESCAPE_REFRESH
+    NGX_ESCAPE_MEMCACHED
+    NGX_ESCAPE_MAIL_AUTH
 
     OK
     DECLINED
@@ -92,7 +101,7 @@ our @EXPORT = qw(
     HTTP_INSUFFICIENT_STORAGE
 );
 
-our $VERSION = '1.1.11.1';
+our $VERSION = '1.1.13.1';
 
 require XSLoader;
 XSLoader::load('Nginx', $VERSION);
@@ -184,7 +193,7 @@ Nginx - full-featured perl support for nginx
             return NGX_WRITE;
         };
         
-        return NGX_SSL_HANDSHAKER;
+        return NGX_SSL_HANDSHAKE;
     };
     
     # asynchronous response
@@ -428,64 +437,41 @@ Which means there is no need to call $r->has_request_body there.
 
 =back
 
-=head1 NAMING
+=head1 INTERNAL FUNCTIONS
 
-    NGX_FOO_BAR  -- constants
-    ngx_*r       -- asynchronous functions (creators)
-    NGX_VERB     -- flow control constants 
-    ngx_verb     -- flow control functions
-    $r->foo_bar  -- request object's methods
+=head3 C<< $uri = ngx_escape_uri $src_uri, $type >>;
 
-Each asynchronous function has an B<r> at the end of its name. This is 
-because those functions are creators of handlers with some parameters. 
-E.g. ngx_writer creates write handler for some connection with some
-scalar as a buffer.
+Escapes C<$src_uri> using internal C<ngx_escape_uri> function from 
+F<src/core/ngx_string.c>. If C<$type> is specified, uses it or 
+NGX_ESCAPE_URI otherwise.
 
-=head1 HTTP REQUEST OBJECT
+    my $foo = ngx_escape_uri 'a b';
+      # gives 'a%20b'
+    
+    my $foo = ngx_escape_uri 'a b', NGX_ESCAPE_URI;
 
-All the things from official embedded perl are there and almost
-completely untouched. There are quite a few new methods though:
+Type defines what characters to escape. 
 
-=over 4
+    NGX_ESCAPE_URI                " ", "#", "%", "?", 
+                                  %00-%1F, %7F-%FF
+                                 
+    NGX_ESCAPE_ARGS               " ", "#", "%", "&", "+", "?", 
+                                  %00-%1F, %7F-%FF 
+                                 
+    NGX_ESCAPE_URI_COMPONENT      everything except: 
+                                   ALPHA, DIGIT, "-", ".", "_", "~"
+                                 
+    NGX_ESCAPE_HTML               " ", "#", """, "%", "'", 
+                                  %00-%1F, %7F-%FF
+                                 
+    NGX_ESCAPE_REFRESH            " ", """, "%", "'", 
+                                  %00-%1F, %7F-%FF
+                                 
+    NGX_ESCAPE_MEMCACHED          " ", "%", %00-%1F
 
-=item $ctx = $r->ctx($ctx)
+=head1 HTTP API
 
-Sets and gets some context scalar. It will be useful to get some data 
-from access handler for example.
-
-=item $r->location_name
-
-Returns the name of the location.
-
-=item $r->root
-
-Returns the root path.
-
-=item $r->main_count_inc()
-
-Increases value of the internal C<< r->main->count >> by 1 and
-therefore allows to send response later from some other callback.
-
-=item $r->send_special($rc)
-
-Sends response. 
-
-=item $r->finalize_request($rc)
-
-Decreases C<< r->main->count >> and finalizes request.
-
-=item $r->phase_handler_inc()
-
-Allows to move to the next phase handler from access handler.
-
-=item $r->core_run_phases()
-
-Allows to break out of access handler and continue later from
-some other callback.
-
-=back
-
-=head1 HTTP CONTENT HANDLER
+=head2 CONTENT HANDLER
 
 This is where response should get generated and send to the client.
 Here's how to send response completely asynchronously:
@@ -509,11 +495,315 @@ Here's how to send response completely asynchronously:
 Notice C<return NGX_DONE> instead of C<return OK>, this is important,
 because it allows to avoid post processing response the old way.
 
-=head1 HTTP ACCESS HANDLER
+=head2 ACCESS HANDLER
 
-todo
+Access handler is a perfect place for access control. Return C<NGX_OK>
+to allow access or some HTTP error to deny:
 
-=head1 FLOW CONTROL
+    sub access_handler {
+        my ($r) = @_;
+        
+        if ($r->uri eq '/private') {
+            return 403;
+        }
+        
+        return NGX_OK;
+    }
+
+It is also possible to do something asynchronously, as with content handler,
+but a bit differently. On success we have to pass request to the next
+phase handler but finalize it on error. As before, C<NGX_DONE> means 
+that we are going to process request ourselves. So, let's rewrite first 
+example but make it suitable for asynchronous execution:
+
+    sub access_handler {
+        my ($r) = @_;
+        
+        if ($r->uri eq '/private') {
+            $r->finazlie_request(403);
+            return NGX_DONE;
+        }
+        
+        $r->phase_handler_inc;
+        $r->core_run_phases;
+        return NGX_DONE;
+    }
+
+Now it is possible to use timer or redis client or any other asynchronous
+function:
+
+    sub access_handler {
+        my ($r) = @_;
+        
+        ngx_timer 1, 0, sub {
+            
+            if ($r->uri eq '/private') {
+                $r->finalize_request(403);
+                return;
+            } 
+            
+            $r->phase_handler_inc;
+            $r->core_run_phases;
+        };
+        
+        return NGX_DONE;
+    }
+
+One of the interesting things you can do with it is putting username into 
+internal variable:
+
+    sub access_handler {
+        my ($r) = @_;
+        
+        ngx_timer 1, 0, sub {
+            
+            $r->variable("my_username", "foobar");
+            
+            $r->phase_handler_inc;
+            $r->core_run_phases;
+        };
+        
+        return NGX_DONE;
+    }
+
+It allows you to pass this variable to the upstream as a header
+or use it in any other way in configuration:
+
+    server {
+        set $my_username "guest";
+        
+        location / {
+            perl_access  Foo::access_handler;
+            
+            proxy_pass        http://1.2.3.4:5678; 
+            proxy_set_header  X-My-Username  $my_username;
+        }
+    }
+
+Be aware that nginx might call access handler more than once depending
+on your configuration. And if you are using redis for this you should
+consider caching reply even for a little time.
+
+=head2 METHODS
+
+Most of the following methods are available for both original embedded perl
+and nginx-perl. 
+
+=head3 C<< $r->status($status) >>
+
+Sets response status. 
+
+    $r->status(404);
+
+=head3 C<< $r->send_http_header($content_type) >>
+
+Sends http headers of the response. If C<$content_type> is given sets
+content type of the response.
+
+    $r->send_http_header("text/html; charset=UTF-8");
+
+=head3 C<< $r->header_only >>
+
+Returns true if client expects only header of the response, e.g. HEAD request.
+
+    unless ($r->header_only) {
+        $r->print("hello world");
+    }
+
+=head3 C<< $r->uri >>
+
+Returns normalized uri of the request without query string. Unparsed uri
+available through either new method C<< $r->unparsed_uri >> or internal
+variable C<< $r->variable("request_uri") >>.
+
+=head3 C<< $r->args >>
+
+This is just a query string. 
+
+=head3 C<< $r->request_method >>
+
+Returns HTTP request method. As usual GET, HEAD, POST, etc.
+
+=head3 C<< $r->remote_addr >>
+
+Returns textual representation of remote address.
+
+=head3 C<< $ctx = $r->ctx($ctx) >>
+
+Sets and gets some context scalar. It will be useful to get some data 
+from access handler for example.
+
+=head3 C<< $r->location_name >>
+
+Returns the name of the location. 
+
+    location /foo {
+        perl_handler ...;
+    }
+
+    my $loc = $r->location_name;    
+    # $loc = '/foo'
+
+=head3 C<< $r->root >>
+
+Returns the root path.
+
+=head3 C<< $r->header_in("User-Agent") >>
+
+Returns desired HTTP header. Case doesn't matter. If you want to get
+all of the headers take a look at one of the new methods: 
+C<< $r->headers_in >>.
+
+=head3 C<< $r->headers_in >>
+
+Returns all headers in the following form:
+
+    {  content-type   => ['text/html'],
+       content-length => [1234]          }
+
+=head3 C<< $r->has_request_body(\&handler) >>
+
+Returns true if there is a request body to be read and sets the handler 
+to call when done or false otherwise. And if there is a body you should
+return from current handler and continue in the new one. 
+
+    sub handler {
+        my ($r) = @_;
+        
+        if ( $r->has_request_body(\&handler_with_body) ) {
+            return OK;
+        }
+        
+        ...
+    }
+
+    sub handler_with_body {
+        my ($r) = @_;
+        
+        my $body = $r->request_body;
+        ...
+    }
+
+=head3 C<< $r->request_body >>
+
+Returns request body if it is stored in memory or undef otherwise.
+By default request body will be read into memory if it is less than 
+C<client_body_buffer_size> and C<client_max_body_size>. You can change
+them in F<nginx-perl.conf>.
+
+=head3 C<< $r->request_body_file >>
+
+If request body doesn't fit into C<client_body_buffer_size> it is stored
+in temporary file. You can read it yourself.
+
+    sub handler_with_body {
+        my ($r) = @_;
+        my $filename = $r->request_body_file;
+        
+        if (open $fh, '<', $filename) {
+            ...
+        }
+    }
+
+=head3 C<< $r->discard_request_body >>
+
+Tells nginx to ignore request body. 
+
+=head3 C<< $r->header_out($name, $value) >>
+
+Adds HTTP header C<"$name: $value"> to the response.
+
+=head3 C<< $r->filename >>
+
+Returns the name of the file translated from URI. 
+
+=head3 C<< $r->print($data, ...) >>
+
+Sends C<$data> to the client. Make sure to send HTTP header before
+you use this function.
+
+=head3 C<< $r->sendfile($filename, $offset, $length) >>
+
+Kind of like print, buf sends a static file instead. If C<$offset> and
+C<$length> are specified uses them. Actual sending happens later.
+
+If you have C<sendfile on;> in your F<nginx-perl.conf> it will bypass
+output filters like gzip.
+
+=head3 C<< $r->flush >>
+
+Forces nginx to start sending data to the client.
+
+=head3 C<< $r->internal_redirect($uri) >>
+
+Performs internal redirect to C<$uri>. You can use it with original handler
+only, i.e. you have to return C<OK> after this call. 
+
+It might change in the future.
+
+=head3 C<< $r->allow_ranges >>
+
+Allows nginx to handle byte ranges in the response.
+
+=head3 C<< $r->unescape($data) >>
+
+Unescapes URI escaped data (C<"%XX">). 
+
+=head3 C<< $r->variable($name, $value) >>
+
+Gets and sets internal variables, the ones that you can see in config.
+
+=head3 C<< $r->log_error($errno, $message) >>
+
+Logs error message using current connection's log. 
+
+=head3 C<< $r->main_count_inc() >>
+
+Increases value of an internal C<< r->main->count >> by 1 and
+therefore allows to send response later from some other callback.
+
+=head3 C<< $r->send_special($rc) >>
+
+Sends response in a special way. We are using this function
+to send response asynchronously from non-http handlers.
+
+    ngx_timer 1, 0, sub {
+        $r->send_http_header('text/html');
+        $r->print("OK\n");
+        
+        $r->send_special(NGX_HTTP_LAST);
+        $r->finalize_request(NGX_OK);
+    };
+
+=head3 C<< $r->finalize_request($rc) >>
+
+Decreases C<< r->main->count >> and finalizes request.
+
+=head3 C<< $r->phase_handler_inc() >>
+
+Allows to move to the next phase handler from access handler.
+
+=head3 C<< $r->core_run_phases() >>
+
+Allows to break out of access handler and continue later from
+some other callback.
+
+=head1 ASYNCHRONOUS API
+
+=head2 NAMING
+
+    NGX_FOO_BAR  -- constants
+    ngx_*r       -- asynchronous functions (creators)
+    NGX_VERB     -- flow control constants 
+    ngx_verb     -- flow control functions
+    $r->foo_bar  -- request object's methods
+
+Each asynchronous function has an B<r> at the end of its name. This is 
+because those functions are creators of handlers with some parameters. 
+E.g. ngx_writer creates write handler for some connection with some
+scalar as a buffer.
+
+=head2 FLOW CONTROL
 
 To specify what to do after each callback we can either call some 
 function or return some value and let handler do it for us. 
@@ -564,8 +854,7 @@ This will be different, if we already have connection somehow:
     
     ngx_read($c);
 
-
-=head1 ERROR HANDLING
+=head2 ERROR HANDLING
 
 Each ngx_* handler will call back on any error with C<$!> set to some value
 and reset to 0 otherwise. 
@@ -584,11 +873,9 @@ Example:
         ...
     };
 
-=head1 ASYNCHRONOUS API
+=head2 FUNCTIONS
 
-=over 4
-
-=item ngx_timer $after, $repeat, sub { };
+=head3 C<< ngx_timer $after, $repeat, sub { }; >>
 
 Creates new timer and calls back after C<$after> seconds.
 If C<$repeat> is set reschedules the timer to call back again after 
@@ -612,8 +899,7 @@ and destroys itself:
         $repeat--;
     };
 
-
-=item ngx_connector $ip, $port, $timeout, sub { };
+=head3 C<< ngx_connector $ip, $port, $timeout, sub { }; >>
 
 Creates connect handler and attempts to connect to C<$ip:$port> within 
 C<$timeout> seconds. Calls back with connection in C<@_> afterwards. 
@@ -625,6 +911,10 @@ Expects one of the following control flow constants as a result of callback:
     NGX_READ 
     NGX_WRITE
     NGX_SSL_HANDSHAKE
+
+Additionally returns connection, if you need one. However, it might be a C<0>
+on some errors, make sure to check it's not if you are planning to use it
+with flow control functions.
 
 Example:
 
@@ -639,9 +929,9 @@ Example:
         return NGX_READ;
     };
 
-=item ngx_reader $connection, $buf, $min, $max, $timeout, sub { };
+=head3 C<< ngx_reader $c, $buf, $min, $max, $timeout, sub { }; >>
 
-Creates read handler for C<$connection> with buffer C<$buf>.
+Creates read handler for connection C<$c> with buffer C<$buf>.
 C<$min> indicates how much data should be present in C<$buf> 
 before the callback and C<$max> limits total length of C<$buf>.
 
@@ -673,9 +963,9 @@ NGX_EOF in case of EOF.
 Be aware, that C<$min> and C<$max> doesn't apply to the amount of data
 you want to read but rather to the appropriate buffer size to call back with.
 
-=item ngx_writer $connection, $buf, $timeout, sub { };
+=head3 C<< ngx_writer $c, $buf, $timeout, sub { }; >>
 
-Creates write handler for C<$connection> with buffer C<$buf> and 
+Creates write handler for connection C<$c> with buffer C<$buf> and 
 write timeout in <$timeout>.
 
 Internally C<$buf> and C<$timeout> are stored as references, so 
@@ -704,7 +994,7 @@ Example:
         return NGX_READ;
     };
 
-=item ngx_ssl_handshaker $connection, $timeout, sub { };
+=head3 C<< ngx_ssl_handshaker $c, $timeout, sub { }; >>
 
 Creates its own internal handler for both reading and writing and tries 
 to do SSL handshake. 
@@ -746,8 +1036,7 @@ Typically it should be called inside connector's callback:
         return NGX_SSL_HANDSHAKE;
     };
 
-
-=item ngx_resolver $name, $timeout, sub { };
+=head3 C<< ngx_resolver $name, $timeout, sub { }; >>
 
 Creates resolver's handler and tries to resolve C<$name> in C<$timeout>
 seconds using resolver specified in F<nginx-perl.conf>.
@@ -784,30 +1073,30 @@ a local resolver, like named that does actual resolving.
         ...
     };
 
-=back
-
 =head1 CONNECTION TAKEOVER
 
 It is possible to takeover client connection completely and create
 you own reader and writer on that connection. 
 You need this for websockets and protocol upgrade in general.
 
+=head2 METHODS
+
 There are two methods to support this:
 
-=over 4
-
-=item $r->take_connection()
+=head3 C<< $r->take_connection >>
 
 C<< $r->take_connection >> initializes internal data structure and 
-replaces connection's data with it. Returns I<connection> on success
-or I<undef> on error.
+replaces connection's data with it. Returns connection on success
+or C<undef> on error.
 
-=item $r->give_connection()
+    my $c = $r->take_connection;
+
+=head3 C<< $r->give_connection >>
 
 C<< $r->give_connection >> attaches request C<$r> back to its connection.
 Doesn't return anything.
 
-=back
+=head2 TAKEOVER
 
 So, to takeover you need to take connection from the request, 
 tell nginx that you are going to finalize it later by calling 
