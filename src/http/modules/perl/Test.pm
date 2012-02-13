@@ -4,9 +4,10 @@ use strict;
 use warnings;
 no  warnings 'uninitialized';
 
+our $VERSION   = '1.1.14.1';
+
 require Exporter;
 our @ISA       = qw(Exporter);
-our $VERSION   = '1.1.13.1';
 our @EXPORT    = qw( 
 
     find_nginx_perl
@@ -109,8 +110,9 @@ sub wait_for_peer ($$) {
         alarm $timeout;
 
         for (1 .. $timeout * 10) {
-            my $sock = IO::Socket::INET->new ( Proto    => 'tcp',
-                                               PeerAddr => "$peer" );
+            my $sock = IO::Socket::INET->new ( Proto     => 'tcp',
+                                               PeerAddr  => "$peer",
+                                               ReuseAddr => 1        );
             unless ($sock) {
                 select ('','','', 0.1);
                 next;
