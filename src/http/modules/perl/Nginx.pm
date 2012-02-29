@@ -3,7 +3,7 @@ package Nginx;
 use strict;
 use warnings;
 
-our $VERSION = '1.1.15.1';
+our $VERSION = '1.1.16.1';
 
 require Exporter;
 our @ISA    = qw(Exporter);
@@ -683,6 +683,11 @@ return from current handler and continue in the new one.
         my $body = $r->request_body;
         ...
     }
+
+=head3 C<< $r->preread >>
+
+Returns part of the body already present in the header's buffer or undef
+otherwise. 
 
 =head3 C<< $r->request_body >>
 

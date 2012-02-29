@@ -517,6 +517,26 @@ has_request_body(r, next)
 
 
 void
+preread(r)
+    CODE:
+        dXSTARG;
+        ngx_http_request_t  *r;
+        size_t               len;
+
+        ngx_http_perl_set_request(r);
+
+        len = r->header_in->last - r->header_in->pos;
+
+        if (len == 0) {
+            XSRETURN_UNDEF;
+        }
+
+        ngx_http_perl_set_targ(r->header_in->pos, len);
+
+        ST(0) = TARG;
+
+
+void
 request_body(r)
     CODE:
         dXSTARG;
@@ -790,9 +810,10 @@ sendfile(r, filename, offset = -1, bytes = 0)
         of.min_uses = clcf->open_file_cache_min_uses;
         of.errors = clcf->open_file_cache_errors;
         of.events = clcf->open_file_cache_events;
-#if (NGX_HAVE_OPENAT)
-        of.disable_symlinks = clcf->disable_symlinks;
-#endif
+
+        if (ngx_http_set_disable_symlinks(r, clcf, &path, &of) != NGX_OK) {
+            XSRETURN_EMPTY;
+        }
 
         if (ngx_open_cached_file(clcf->open_file_cache, &path, &of, r->pool)
             != NGX_OK)
@@ -1338,7 +1359,7 @@ ngx_log_error(errno, message)
 
 SV *
 ngx_timer(after, repeat, cb)
-    PROTOTYPE: $$&
+    PROTOTYPE: $$$
     CODE:
         ngx_connection_t *c;
 
@@ -1363,7 +1384,7 @@ ngx_timer_clear(timer)
 
 SV *
 ngx_connector(address, port, timeout, cb)
-    PROTOTYPE: $$$&
+    PROTOTYPE: $$$$
     CODE:
         ngx_connection_t  *c;
 
@@ -1380,7 +1401,7 @@ ngx_connector(address, port, timeout, cb)
 
 void
 ngx_reader(c, buf, min, max, timeout, cb)
-    PROTOTYPE: $$$$$&
+    PROTOTYPE: $$$$$$
     CODE:
         ngx_connection_t  *c;
 
@@ -1391,7 +1412,7 @@ ngx_reader(c, buf, min, max, timeout, cb)
 
 void
 ngx_writer(c, buf, timeout, cb)
-    PROTOTYPE: $$$&
+    PROTOTYPE: $$$$
     CODE:
         ngx_connection_t  *c;
 
@@ -1455,7 +1476,7 @@ ngx_resolver(name, timeout, cb)
 
 void
 ngx_ssl_handshaker(c, timeout, cb)
-    PROTOTYPE: $$&
+    PROTOTYPE: $$$
     CODE:
         ngx_connection_t  *c;
 
