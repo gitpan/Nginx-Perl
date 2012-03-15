@@ -4,7 +4,7 @@ use strict;
 use warnings;
 no  warnings 'uninitialized';
 
-our $VERSION   = '1.1.16.1';
+our $VERSION   = '1.1.17.1';
 
 require Exporter;
 our @ISA       = qw(Exporter);
@@ -537,7 +537,7 @@ Returns undef on error.
 
 =head3 C<< $rv = wait_for_peer "$host:$port", $timeout; >>
 
-Tries to connect to C<$host:$port> within $timeout. Returns C<1>
+Tries to connect to C<$host:$port> within C<$timeout> seconds. Returns C<1>
 on success and C<undef> on error.
 
     wait_for_peer "127.0.0.1:1234", 2
