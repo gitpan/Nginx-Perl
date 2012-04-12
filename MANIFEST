@@ -1,6 +1,9 @@
 CHANGES
 t
-t/05-functions.t
+t/21-time-functions.t
+t/11-server_tokens.t
+t/20-uri-escape.t
+t/10-basic-http.t
 t/00-basic.t
 t/01-resolver.t
 t/02-ssl_handshaker.t

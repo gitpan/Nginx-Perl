@@ -1,10 +1,81 @@
 package Nginx::Test;
 
+=head1 NAME
+
+Nginx::Test - testing framework for nginx-perl and nginx
+
+=head1 SYNOPSIS
+
+    use Nginx::Test;
+     
+    my $nginx = find_nginx_perl;
+    my $dir   = make_path 'tmp/test';
+    
+    my ($child, $peer) = 
+        fork_nginx_handler_die  $nginx, $dir, '', <<'END';
+        
+        sub handler {
+            my $r = shift;
+            ...
+             
+            return OK;
+        }
+        
+    END
+    
+    wait_for_peer $peer, 2
+        or die "peer never started\n";
+    
+    my ($body, $headers) = http_get $peer, "/", 2;
+    ...
+    
+=head1 DESCRIPTION
+
+Making sure testing isn't a nightmare. 
+
+This module provides some basic functions to find nginx-perl, prepare
+configuration, generate handler, start in a child process, query it and
+get something back. And it comes with Nginx::Perl. You can simply add it
+as a dependency for you module and use.
+
+=cut
+
 use strict;
 use warnings;
 no  warnings 'uninitialized';
+use bytes;
 
-our $VERSION   = '1.1.18.1';
+our $VERSION   = '1.1.18.2';
+
+use Config;
+use IO::Socket;
+sub CRLF { "\x0d\x0a" }
+
+
+=head1 EXPORT
+
+    find_nginx_perl
+    get_nginx_conf_args_die
+    get_unused_port 
+    wait_for_peer 
+    prepare_nginx_dir_die
+    cat_nginx_logs
+    fork_nginx_die
+    fork_child_die
+    http_get
+    get_nginx_incs
+    fork_nginx_handler_die
+    eval_wait_sub
+    connect_peer
+    send_data
+    parse_http_request
+    parse_http_response
+    inject_content_length
+    read_http_response
+    make_path
+    cat_logs
+
+=cut
 
 require Exporter;
 our @ISA       = qw(Exporter);
@@ -21,16 +92,32 @@ our @EXPORT    = qw(
     http_get
     get_nginx_incs
     fork_nginx_handler_die
+    eval_wait_sub
+    connect_peer
+    send_data
+    parse_http_request
+    parse_http_response
+    inject_content_length
+    read_http_response
+    make_path
+    cat_logs
 
 );
 
-use Config;
-use IO::Socket;
 
-sub CRLF { "\x0d\x0a" }
+=head1 FUNCTIONS
 
-$Nginx::Test::PARENT = 1;
+=head2 find_nginx_perl
 
+Finds executable binary for F<nginx-perl>. Returns executable path
+or C<undef> if not found.
+
+    my $nginx = find_nginx_perl
+        or die "Cannot find nginx-perl\n";
+    
+    # $nginx = './objs/nginx-perl'
+
+=cut
 
 sub find_nginx_perl () {
 
@@ -81,16 +168,27 @@ sub find_nginx_perl () {
 }
 
 
+=head2 get_unused_port
+
+Returns available port number to bind to. Tries to use it first and returns
+C<undef> if fails.
+
+    $port = get_unused_port
+        or die "No unused ports\n";
+
+=cut
+
 sub get_unused_port () {
     my $port = 50000 + int (rand() * 5000);
 
     while ($port++ < 64000) {
-        my $sock = IO::Socket::INET->new ( Listen    => 5,
-                                           LocalAddr => '127.0.0.1',
-                                           LocalPort => $port,
-                                           Proto     => 'tcp',
-                                           ReuseAddr => 1            )
-                or next;
+        my $sock = IO::Socket::INET->new ( 
+            Listen    => 5,
+            LocalAddr => '127.0.0.1',
+            LocalPort => $port,
+            Proto     => 'tcp',
+            ReuseAddr => 1
+        ) or next;
 
         $sock->close;
         return $port;
@@ -100,51 +198,90 @@ sub get_unused_port () {
 }
 
 
+=head2 wait_for_peer C<< "$host:$port", $timeout >>
+
+Tries to connect to C<$host:$port> within C<$timeout> seconds. Returns C<1>
+on success and C<undef> on error.
+
+    wait_for_peer "127.0.0.1:1234", 2
+        or die "Failed to connect to 127.0.0.1:1234 within 2 seconds";
+
+=cut
+
 sub wait_for_peer ($$) {
     my ($peer, $timeout) = @_;
     my $rv;
+    my $at = time + $timeout;
 
     eval {
-        local $SIG{'ALRM'} = sub {  die "timedout\n";  };
+        local $SIG{'ALRM'} = sub {  die "SIGALRM\n";  };
 
-        alarm $timeout;
+        for (my $t = time ; $at - $t > 0; $t = time) {
+            alarm $at - $t;
 
-        for (1 .. $timeout * 10) {
             my $sock = IO::Socket::INET->new ( Proto     => 'tcp',
                                                PeerAddr  => "$peer",
                                                ReuseAddr => 1        );
+            alarm 0;
+
             unless ($sock) {
                 select ('','','', 0.1);
                 next;
             }
 
             $rv = 1;
-
             $sock->close;
 
-            alarm 0;
             last;
         }
     };
 
     alarm 0;
-
     return $rv;
 }
 
 
+=head2 prepare_nginx_dir_die C<< $dir, $conf, @pkgs >>
+
+Creates directory tree suitable to run F<nginx-perl> from. Puts there 
+config and packages specified as string scalars. Dies on errors.
+
+    prepare_nginx_dir_die "tmp/foo", <<'ENDCONF', <<'ENDONETWO';
+    
+        worker_processes  1;
+        events {  
+            worker_connections  1024;  
+        }
+        http {
+            server {
+                location / {
+                    ...
+                }
+            }
+        }
+     
+    ENDCONF
+    
+        package One::Two;
+        
+        sub handler {
+            ...
+        }
+        
+        1;
+    
+    ENDONETWO
+
+=cut
+
 sub prepare_nginx_dir_die {
     my ($dir, $conf, @pkgs) = @_;
 
-    if (!-e $dir) {
-        mkdir "$dir"
-            or die "Cannot create directory '$dir': $!";
-        mkdir "$dir/conf"
-            or die "Cannot create directory '$dir/conf': $!";
-        mkdir "$dir/lib"
-            or die "Cannot create directory '$dir/lib': $!";
-        mkdir "$dir/logs"
-            or die "Cannot create directory '$dir/logs': $!";
+    foreach ("$dir", "$dir/conf", "$dir/lib", "$dir/logs", "$dir/html") {
+        if (!-e $_) {
+            mkdir $_
+                or die "Cannot create directory '$_': $!";
+        }
     }
 
     foreach ( "$dir/lib", 
@@ -152,6 +289,14 @@ sub prepare_nginx_dir_die {
 
         open my $fh, '>', "$_/.exists"
             or die "Cannot open file '$_/.exists' for writing: $!";
+        close $fh;
+    }
+
+    {
+        open my $fh, '>', "$dir/html/index.html"
+            or die "Cannot open file '$dir/html/index.html' for writing: $!";
+        binmode $fh;
+        print $fh "ok";
         close $fh;
     }
 
@@ -170,6 +315,12 @@ sub prepare_nginx_dir_die {
     }
 
     {
+        my $incs = join "\n", 
+                     map { "perl_modules \"$_\";" } 
+                       get_nginx_incs (undef, $dir);
+          # injecting proper @INC
+        $conf =~ s/(\s+http\s*{)/$1\n$incs\n/gs;
+
         open my $fh, '>', "$dir/conf/nginx-perl.conf"
             or die "Cannot open file '$dir/conf/nginx-perl.conf' " .
                    "for writing: $!";
@@ -203,6 +354,15 @@ sub prepare_nginx_dir_die {
 }
 
 
+=head2 cat_nginx_logs C<< $dir >>
+
+Returns all logs from C<$dir.'/logs'> as a single scalar. Useful for 
+diagnostics.
+
+    diag cat_nginx_logs $dir;
+
+=cut
+
 sub cat_nginx_logs ($) {
     my ($dir) = @_;
     my $out;
@@ -234,6 +394,45 @@ $buf
 }
 
 
+=head2 fork_nginx_die C<< $nginx, $dir >>
+
+Forks F<nginx-perl> using executable binary from C<$nginx> and 
+prepared directory path from C<$dir> and returns guard object. 
+Dies on errors. Internally does something like this: C<"$nginx -p $dir">
+
+    my $child = fork_nginx_die $nginx, $dir;
+    ...
+     
+    undef $child;
+
+=cut
+
+{
+    package Nginx::Test::Child;
+
+    sub new {
+        my $class = shift;
+        my $pid   = shift;
+        my $self  = \$pid;
+
+        bless $self, $class;
+    }
+
+    sub terminate {
+        my $self = shift;
+
+        unless ($Nginx::Test::Child::IS_CHILD) {
+            if ($$self) {
+                kill 'TERM', $$self;  $$self = 0; 
+                wait;
+                select '','','', 0.1;
+            }
+        }
+    }
+
+    sub DESTROY { my $self = shift; $self->terminate; }
+}
+
 sub fork_nginx_die ($$) {
     my ($nginx, $path) = @_;
     my $pid = fork();
@@ -242,7 +441,7 @@ sub fork_nginx_die ($$) {
             if  !defined $pid;
 
     if ($pid == 0) {
-        $Nginx::Test::PARENT = 0;
+        $Nginx::Test::Child::IS_CHILD = 1;
 
         open STDOUT, '>', "$path/logs/stdout.log"
             or die "Cannot open file '$path/logs/stdout.log' for writing: $!";
@@ -258,6 +457,19 @@ sub fork_nginx_die ($$) {
 }
 
 
+=head2 fork_child_die C<< sub {} >>
+
+Forks sub in a child process and returns its guard object. Dies on errors.
+
+    my $child = fork_child_die sub {
+        ...
+        sleep 5;  
+    };
+     
+    undef $child;
+
+=cut
+
 sub fork_child_die (&) {
     my ($cb) = @_;
     my $pid = fork();
@@ -266,7 +478,7 @@ sub fork_child_die (&) {
             if  !defined $pid;
 
     if ($pid == 0) {
-        $Nginx::Test::PARENT = 0;
+        $Nginx::Test::Child::IS_CHILD = 1;
 
         &$cb;
         exit;
@@ -275,6 +487,17 @@ sub fork_child_die (&) {
     return Nginx::Test::Child->new ($pid);
 }
 
+=head2 get_nginx_conf_args_dir C<< $nginx >>
+
+Runs C<nginx-perl -V>, parses its output and returns a set of keys 
+out of the list of configure arguments. 
+
+    my %CONFARGS = get_nginx_conf_args_dir;
+    
+    # %CONFARGS = ( '--with-http_ssl_module' => 1,
+    #               '--with-...'             => 1  )
+
+=cut
 
 sub get_nginx_conf_args_die ($) {
     my ($nginx) = @_;
@@ -288,6 +511,22 @@ sub get_nginx_conf_args_die ($) {
                            <$fh>                                           } ;
 }
 
+
+=head2 http_get C<< $peer, $uri, $timeout >>
+
+Connects to C<$peer>, sends GET request and return its C<$body> and 
+parsed C<$headers>.
+
+    my ($body, $headers) = http_get '127.0.0.1:1234', '/', 2;
+    
+    $headers = {  _status          => 200,
+                  _message         => 'OK',
+                  _version         => 'HTTP/1.0',
+                  'content-type'   => ['text/html'],
+                  'content-length' => [1234],
+                  ...                               }
+
+=cut
 
 sub http_get ($$$) {
     my ($peer, $uri, $timeout) = @_;
@@ -315,19 +554,19 @@ sub http_get ($$$) {
         # parsing HTTP response
 
         @{h}{'_version', '_status', '_message'} = 
-             /  ^ \s*  ( HTTP\/\d\.\d )  
-                  \s+  ( \d+ )  
-                  \s*  ( [^\x0d\x0a]+ )  
-                  \x0d?\x0a               /gcx;
+             m/  ^ \s*  ( HTTP\/\d\.\d )  
+                   \s+  ( \d+ )  
+                   \s*  ( [^\x0d\x0a]+ )  
+                   \x0d?\x0a               /gcx;
 
         push @{$h{ lc($1) }}, $2
             while 
-              /   \G  \s*  ( [a-zA-Z][\w-]+ ) 
-                      \s*   : 
-                      \s*  ( [^\x0d\x0a]+ ) 
-                      \x0d?\x0a                 /gcx;
+              m/   \G  \s*  ( [a-zA-Z][\w-]+ ) 
+                       \s*   : 
+                       \s*  ( [^\x0d\x0a]+ ) 
+                       \x0d?\x0a                 /gcx;
 
-        / \G \x0d?\x0a /gcx;
+        m/ \G \x0d?\x0a /gcx;
 
         $_ = substr $_, pos($_);
 
@@ -340,6 +579,14 @@ sub http_get ($$$) {
                       : $_;
 }
 
+
+=head2 get_nginx_incs C<< $nginx, $dir >>
+
+Returns proper C<@INC> to use in F<nginx-perl.conf> during tests. 
+
+    my @incs = get_nginx_incs $nginx, $dir;
+
+=cut
 
 sub get_nginx_incs ($$) {
     my ($nginx, $path) = @_;
@@ -355,15 +602,45 @@ sub get_nginx_incs ($$) {
 }
 
 
+=head2 fork_nginx_handler_dir C<< $nginx, $dir, $conf, $code >>
+
+Gets unused port, prepares directory for nginx with predefined 
+package name, forks nginx and gives you a child object and generated 
+peer back. Allows to inject C<$conf> into F<nginx-perl.conf> and 
+C<$code> into the package. Expects to found C<sub handler { ... }> 
+in C<$code>. Dies on errors.
+
+    my ($child, $peer) = 
+        fork_nginx_handler_die $nginx, $dir, <<'ENDCONF', <<'ENDCODE';
+        
+        resolver 8.8.8.8;
+        
+    ENDCONF
+
+        sub handler {
+            my ($r) = @_;
+            ...
+            
+            return OK;
+        }
+        
+    ENDCODE
+    ...
+     
+    undef $child; 
+
+Be aware that this function is not suited for every module. It expects 
+C<$dir> to be relative to the current directory or any of its subdirectories,
+i.e. F<foo>, F<foo/bar>. And also expects F<blib/lib> and F<blib/arch>
+to contain your libraries, which is where L<ExtUtils::MakeMaker> puts them.
+
+=cut
+
 sub fork_nginx_handler_die ($$$$) {
     my ($nginx, $path, $conf, $code) = @_;
 
     my $port = get_unused_port
         or die "Cannot get unused port";
-
-    my $incs = join "\n", 
-                 map { "perl_inc \"$_\";" } 
-                   get_nginx_incs ($nginx, $path);
 
     prepare_nginx_dir_die $path, <<"    ENDCONF", <<"    ENDPKG";
 
@@ -379,8 +656,6 @@ sub fork_nginx_handler_die ($$$$) {
 
         http {
             default_type  text/plain;
-
-$incs
 
             perl_inc  lib;
             perl_inc  ../lib;
@@ -421,242 +696,417 @@ $code
 }
 
 
-1;
-package Nginx::Test::Child;
+=head2 eval_wait_sub C<< $name, $timeout, $sub >>
 
+Wraps C<eval> block around subroutine C<$sub>, sets alarm to C<$timeout> 
+and waits for sub to finish. Returns undef on alarm and if C<$sub> dies.
 
-sub new {
-    my $class = shift;
-    my $pid   = shift;
-    my $self  = \$pid;
+    my $rv = eval_wait_sub "test1", 5, sub {
+        ...
+        pass "test1";
+    };
+    
+    fail "test1"  unless $rv;
 
-    bless $self, $class;
-}
+=cut
 
+sub eval_wait_sub ($$) {
+    my $timeout = shift;
+    my $sub     = shift;
+    my $rv;
 
-sub terminate {
-    my $self = shift;
+    eval {
+        local $SIG{ALRM} = sub { die "SIGALRM\n" };
+        alarm $timeout;
 
-    if ($$self && $Nginx::Test::PARENT) {
-        kill 'TERM', $$self;
-        $$self = 0;
-        wait;
+        $rv = &$sub;
+    };
 
-        select '','','', 0.1;
+    alarm 0;
+
+    unless ($@) {
+        return $rv;
+    } else {
+      # Test::More::diag "\neval_wait_sub ('$name', $timeout, ...) died: $@\n";
+        return undef;
     }
 }
 
 
-sub DESTROY {
-    my $self = shift;
+=head2 connect_peer C<< "$host:$port", $timeout >>
 
-    if ($$self && $Nginx::Test::PARENT) {
-        kill 'TERM', $$self;
-        $$self = 0;
-        wait;
+Tries to connect to C<$host:$port> within C<$timeout> seconds.
+Returns socket handle on success or C<undef> otherwise.
 
-        select '','','', 0.1;
-    }
-}
-
-1;
-__END__
-
-=head1 NAME
-
-Nginx::Test - simple framework for writing tests for nginx-perl and nginx
-
-=head1 SYNOPSIS
-
-    use Nginx::Test;
-     
-    my $nginx = find_nginx_perl;
-    my $dir   = 'tmp/test';
-    
-    my ($child, $peer) = 
-        fork_nginx_handler_die  $nginx, $dir, '', <<'END';
-        
-        sub handler {
-            my $r = shift;
-            ...
-             
-            return OK;
-        }
-        
-    END
-    
-    wait_for_peer $peer, 2
-        or die "peer never started\n";
-    
-    my ($body, $headers) = http_get $peer, "/", 2;
-    ...
-    
-=head1 DESCRIPTION
-
-Making sure testing isn't a nightmare. 
-
-This module provides some basic functions to find nginx-perl, prepare
-configuration, generate handler, start in a child process, query it and
-get something back. And it comes with Nginx::Perl. You can simply add it
-as a dependency for you module and use.
-
-=head1 EXPORT
-
-    find_nginx_perl
-    get_nginx_conf_args_die
-    get_unused_port 
-    wait_for_peer 
-    prepare_nginx_dir_die
-    cat_nginx_logs
-    fork_nginx_die
-    fork_child_die
-    fork_nginx_handler_die
-    http_get
-
-=head1 FUNCTIONS
-
-=head3 C<< $nginx = find_nginx_perl (); >>
-
-Finds executable F<nginx-perl> binary to run. Returns C<undef> if
-can't find any or executable path otherwise. 
-
-    $nginx = './objs/nginx-perl'
-
-=head3 C<< %CONFARGS = get_nginx_conf_args_dir $nginx; >>
-
-Runs C<nginx-perl -V> and parses its output to produce set
-of keys out of the list of configure arguments:
-
-    %CONFARGS = ( '--with-http_ssl_module' => 1,
-                  '--with-...'             => 1  )
-
-=head3 C<< $port = get_unused_port (); >>
-
-Gives you available port number to bind to. Tries to use it first.
-Returns undef on error.
-
-=head3 C<< $rv = wait_for_peer "$host:$port", $timeout; >>
-
-Tries to connect to C<$host:$port> within C<$timeout> seconds. Returns C<1>
-on success and C<undef> on error.
-
-    wait_for_peer "127.0.0.1:1234", 2
+    $sock = connect_peer "127.0.0.1:55555", 5
         or ...;
 
-=head3 C<< prepare_nginx_dir_die $dir, $conf, $package1, $package2, ...; >>
+=cut
 
-Creates directory tree suitable to run F<nginx-perl> from. Puts there 
-config and packages specified as string scalars. Dies on errors.
+sub connect_peer ($$) {
+    my ($peer, $timeout) = @_;
 
-    prepare_nginx_dir_die "tmp/foo", <<'ENDCONF', <<'ENDONETWO';
+    return eval_wait_sub $timeout, sub {
+        my $sock = IO::Socket::INET->new (PeerAddr => $peer)
+            or die "$!\n";
+
+        $sock->autoflush(1);
+
+        return $sock;
+    };
+}
+
+
+=head2 send_data C<< $sock, $buf, $timeout >>
+
+Sends an entire C<$buf> to the socket C<$sock> in C<$timeout> seconds. 
+Returns amount of data sent on success or undef otherwise. This amount 
+is guessed since C<print> is used to send data.
+
+    send_data $sock, $buf, 5
+        or ...;
+
+=cut
+
+sub send_data ($$$) {
+    my ($sock, undef, $timeout) = @_;
+    my $buf = \$_[1];
+
+    return eval_wait_sub $timeout, sub {
+        print $sock $$buf;
+        return length $$buf;
+    };
+}
+
+
+=head2 parse_http_request C<< $buf, $r >>
+
+Parses HTTP request from C<$buf> and puts parsed data structure into C<$r>. 
+Returns length of the header in bytes on success or C<undef> on error.
+Returns C<0> if cannot find header separator C<"\n\n"> in C<$buf>.
+
+Data returned in the following form:
+
+    $r = { 'connection'    => ['close'],
+           'content-type'  => ['text/html'],
+           ...
+           '_method'       => 'GET',
+           '_request_uri'  => '/?foo=bar',
+           '_version'      => 'HTTP/1.0',
+           '_uri'          => '/',
+           '_query_string' => 'foo=bar',
+           '_keepalive'    => 0              };
+
+Example:
+
+    $len = parse_http_request $buf, $r;
     
-        worker_processes  1;
-        events {  
-            worker_connections  1024;  
-        }
-        http {
-            server {
-                location / {
-                    ...
-                }
+    if ($len) {
+        # ok
+        substr $buf, 0, $len, '';
+        warn Dumper $r;
+    } elsif (defined $len) {
+        # read more data 
+        # and try again
+    } else {
+        # bad request
+    }
+
+=cut
+
+sub parse_http_request ($$) {
+    my $buf = \$_[0];
+
+    if ($$buf =~ /(\x0d\x0a\x0d\x0a)/gs || $$buf =~ /(\x0a\x0a)/gs) {
+        my $header_len = pos($$buf) - length($1);
+        my $sep_len = length($1);
+
+        pos($$buf) = 0; # just in case we want to reparse 
+
+        my @lines = split /^/, substr ($$buf, 0, $header_len);
+
+        return undef  
+              if  @lines < 1;
+
+        my %h;
+        @h{ '_method', 
+            '_request_uri', 
+            '_version'      } = split ' ', shift @lines;
+
+        @h{'_uri', '_query_string'} = split /\?/, $h{_request_uri}, 2;
+
+        map {  
+            my ($key, $value) = split ':', $_, 2;
+
+                $key   =~ s/^\s+//; $key   =~ s/\s+$//;
+                $value =~ s/^\s+//; $value =~ s/\s+$//;
+
+            push @{$h{ lc($key) }}, $value;
+        } @lines;
+
+        if ($h{_version} eq 'HTTP/1.1') {
+            if (!exists $h{connection}) {
+                $h{_keepalive} = 1  
+            } elsif ($h{connection}->[0] !~ /[Cc]lose/) {
+                $h{_keepalive} = 1  
+            }
+        } elsif (exists $h{connection}) {
+            if ($h{connection}->[0] =~ /[Kk]eep-[Aa]live/) {
+                $h{_keepalive} = 1;
             }
         }
-     
-    ENDCONF
+
+        $_[1] = \%h;
+        return $header_len + $sep_len;
+    } else {
+        return 0;
+    }
+}
+
+
+=head2 parse_http_response C<< $buf, $r >>
+
+Parses HTTP response from C<$buf> and puts parsed data structure into C<$r>. 
+Returns length of the header in bytes on success or C<undef> on error.
+Returns C<0> if cannot find header separator C<"\n\n"> in C<$buf>.
+
+Data returned in the following form:
+
+    $r = { 'connection'   => ['close'],
+           'content-type' => ['text/html'],
+           ...
+           '_status'      => '404',
+           '_message'     => 'Not Found',
+           '_version'     => 'HTTP/1.0',
+           '_keepalive'   => 0              };
+
+Example:
+
+    $len = parse_http_response $buf, $r;
     
-        package One::Two;
-        
-        sub handler {
-            ...
+    if ($len) {
+        # ok
+        substr $buf, 0, $len, '';
+        warn Dumper $r;
+    } elsif (defined $len) {
+        # read more data 
+        # and try again
+    } else {
+        # bad response
+    }
+
+=cut
+
+sub parse_http_response ($$) {
+    my $buf = \$_[0];
+
+    if ($$buf =~ /(\x0d\x0a\x0d\x0a)/gs || $$buf =~ /(\x0a\x0a)/gs) {
+        my $header_len = pos($$buf) - length($1);
+        my $sep_len = length($1);
+
+        pos($$buf) = 0; 
+
+        my @lines = split /^/, substr ($$buf, 0, $header_len);
+
+        return undef
+              if @lines < 1;
+
+        my %h;
+        @h{ '_version', 
+            '_status', 
+            '_message'  } = split ' ', shift (@lines), 3;
+
+        $h{_message} =~ s/\s+$//;
+
+        map {  
+            my ($key, $value) = split ':', $_, 2;
+
+                $key   =~ s/^\s+//; $key   =~ s/\s+$//;
+                $value =~ s/^\s+//; $value =~ s/\s+$//;
+
+            push @{$h{ lc($key) }}, $value;
+        } @lines;
+
+        if ($h{_version} eq 'HTTP/1.1') {
+            if (!exists $h{connection}) {
+                $h{_keepalive} = 1  
+            } elsif ($h{connection}->[0] !~ /[Cc]lose/) {
+                $h{_keepalive} = 1  
+            }
+        } elsif (exists $h{connection}) {
+            if ($h{connection}->[0] =~ /[Kk]eep-[Aa]live/) {
+                $h{_keepalive} = 1;
+            }
         }
-        
-        1;
-    
-    ENDONETWO
 
-=head3 C<< $text = cat_nginx_logs $dir; >>
+        $_[1] = \%h;
+        return $header_len + $sep_len;
+    } else {
+        return 0;
+    }
+}
 
-Scans C<$dir> for logs and concatenates them into a single scalar.
-Useful for diagnostics.
 
-    prepate_nginx_dir_dir $dir, ... 
-    ...
-    
-    ok $foo, "bar", "foo is bar"
-        or diag cat_nginx_logs $dir;
+=head2 inject_content_length C<< $buf >>
 
-=head3 C<< $child = fork_nginx_die $nginx, $dir; >>
+Parses HTTP header and inserts B<Content-Length> if needed, assuming
+that C<$buf> contains entire request or response.
 
-Forks F<nginx-perl> using executable binary from C<$nginx> and 
-prepared directory path from C<$dir>. Dies on errors.
-Internally does something like this: C<"$nginx -p $dir">
+    $buf = "PUT /"          ."\x0d\x0a".
+           "Host: foo.bar"  ."\x0d\x0a".
+           ""               ."\x0d\x0a".
+           "hello";
+           
+    inject_content_length $buf;
 
-    my $child = fork_nginx_die $nginx, $dir;
-    ...
-     
-    undef $child;
+=cut
 
-=head3 C<< $child = fork_child_die sub { ... }; >>
+sub inject_content_length ($) {
+    my $buf = \$_[0];
 
-Forks sub in a child process. Dies on errors.
+    if ($$buf =~ /(\x0d\x0a\x0d\x0a)/gs) {
+        my $header_len = pos($$buf) - length($1);
+            pos($$buf) = 0;
+        my $sep_len = length($1);
+        my @lines = split /^/, substr ($$buf, 0, $header_len);
+        shift @lines;
 
-    my $child = fork_child_die sub {
-        ...
-         
-        sleep 5;  
+        my %h;
+        map {  
+            my ($key, $value) = split ':', $_, 2;
+
+                $key   =~ s/^\s+//; $key   =~ s/\s+$//;
+                $value =~ s/^\s+//; $value =~ s/\s+$//;
+
+            push @{$h{ lc($key) }}, $value;
+        } @lines;
+
+        if (length ($$buf) - $header_len - $sep_len > 0) {
+            if (!exists $h{'content-length'}) {
+                my $len = (length ($$buf) - $header_len - $sep_len);
+                substr $$buf, $header_len + length (CRLF), 0, 
+                   "Content-Length: $len"  .CRLF;
+                return $len;
+            } else {
+                return 0;
+            }
+        } else {
+            return 0;
+        }
+    } else {
+        return undef;
+    }
+}
+
+
+=head2 read_http_response C<< $sock, $h, $timeout >>
+
+Reads and parses HTTP response header from C<$sock> into C<$h>
+within C<$timeout> seconds. 
+Returns true on success or C<undef> on error.
+
+    read_http_response $sock, $h, 5
+        or ...;
+
+=cut
+
+sub read_http_response ($$$$) {
+    my ($sock, undef, undef, $timeout) = @_;
+    my $buf = \$_[1];
+    my $h   = \$_[2];
+
+    return eval_wait_sub $timeout, sub {
+        local $/ = CRLF.CRLF; 
+        $$buf = <$sock>;
+
+        parse_http_response $$buf, $$h
+            or return undef;
+
+        $$buf = '';
+        my $len = $$h->{'content-length'} ? $$h->{'content-length'}->[0] : 0;
+
+        if ($len) {
+            local $/ = \$len;
+            $$buf = <$sock>;
+        }
+
+        return 1;
     };
-    ...
-     
-    undef $child;
+}
 
-=head3 C<< @incs = get_nginx_incs $nginx, $dir; >>
 
-Generates proper C<@INC> to use in F<nginx-perl.conf> during tests.
+=head2 make_path C<< $path >>
 
-=head3 C<< ($child, $peer) = fork_nginx_handler_dir $nginx, $dir, $conf, $code; >>
+Creates directory tree specified by C<$path> and returns this path 
+or undef on error. 
 
-Gets unused port, prepares directory for nginx with predefined 
-package name, forks nginx and gives you child object and peer back.
-Allows to inject C<$conf> into config and C<$code> into the package.
-Expects to have C<sub handler { ... }> in the code. Dies on errors.
+    $path = make_path 'tmp/foo'
+        or die "Can't create tmp/foo: $!\n";
 
-    my ($child, $peer) = 
-        fork_nginx_handler_die $nginx, $dir, <<'ENDCONF', <<'ENDCODE';
-        
-        resolver 8.8.8.8;
-        
-    ENDCONF
+=cut
 
-        sub handler {
-            my ($r) = @_;
-            ...
-            
-            return OK;
+sub make_path ($) {
+    my $path = shift;
+    my @dirs = split /[\/\\]+/, $path;
+    my $dir;
+
+    pop @dirs  if @dirs && $dirs[-1] eq '';
+
+    foreach (@dirs) {
+        $dir .= "$_";
+
+        if ($dir) {
+            if (!-e $dir) {
+                mkdir $dir
+                    or return undef;
+            }
         }
-        
-    ENDCODE
-    
-    ...
-     
-    undef $child; 
 
-Be aware that this function is not suited for every module. It expects 
-C<$dir> to be relative to the current directory or any of its subdirectories,
-i.e. F<foo>, F<foo/bar>. And also expects F<blib/lib> and F<blib/arch>
-to contain your libraries, which is where L<ExtUtils::MakeMaker> puts them.
+        $dir .= '/';
+    }
 
-=head3 C<< ($body, $headers) = http_get $peer, $uri, $timeout; >>
+    return $path;
+}
 
-Connects to C<$peer>, sends GET request and return C<$body> and C<$headers>.
 
-    my ($body, $headers) = http_get '127.0.0.1:1234', '/', 2;
-    
-    $headers = {  _status        => 200,
-                  _message       => 'OK',
-                  _version       => 'HTTP/1.0',
-                  content-type   => ['text/html'],
-                  content-length => [1234],
-                  ...                               }
+=head2 cat_logs C<< $dir >>
+
+Scans directory C<$dir> for logs, concatenates them and returns.
+
+    diag cat_logs $dir;
+
+=cut
+
+sub cat_logs ($) {
+    my ($dir) = @_;
+    my $out;
+
+    opendir my $d, $dir
+        or return undef;
+
+    my @FILES = grep { ($_ ne '.' && $_ ne '..' && $_ ne '.exists') && 
+                        -f "$dir/$_" } 
+                  readdir $d;
+    closedir $d;
+
+    foreach (@FILES) {
+
+        my $buf = do { open my $fh, '<', "$dir/$_"; local $/; <$fh> };
+
+        $out .= <<"        EOF";
+
+$dir/$_:
+------------------------------------------------------------------
+$buf
+------------------------------------------------------------------
+
+
+        EOF
+    }
+
+    return $out;
+}
+
 
 =head1 AUTHOR
 
@@ -664,10 +1114,11 @@ Alexandr Gomoliako <zzz@zzz.org.ua>
 
 =head1 LICENSE
 
-Copyright 2011 Alexandr Gomoliako. All rights reserved.
+Copyright 2011-2012 Alexandr Gomoliako. All rights reserved.
 
 This module is free software. It may be used, redistributed and/or modified 
 under the same terms as B<nginx> itself.
 
 =cut
 
+1;

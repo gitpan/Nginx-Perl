@@ -3,12 +3,15 @@ package Nginx;
 use strict;
 use warnings;
 
-our $VERSION = '1.1.18.1';
+our $VERSION = '1.1.18.2';
 
 require Exporter;
 our @ISA    = qw(Exporter);
 our @EXPORT = qw(
 
+    ngx_http_time
+    ngx_http_cookie_time
+    ngx_http_parse_time
     ngx_escape_uri
     ngx_prefix
     ngx_conf_prefix
@@ -439,18 +442,19 @@ Which means there is no need to call $r->has_request_body there.
 
 =head1 INTERNAL FUNCTIONS
 
-=head3 C<< $uri = ngx_escape_uri $src_uri, $type >>;
+=head3 C<< ngx_escape_uri $uri, $type >>;
 
-Escapes C<$src_uri> using internal C<ngx_escape_uri> function from 
+Escapes C<$uri> using internal function ngx_escape_uri() from 
 F<src/core/ngx_string.c>. If C<$type> is specified, uses it or 
-NGX_ESCAPE_URI otherwise.
+NGX_ESCAPE_URI otherwise. Returns escaped uri on success or 
+undef on error;
 
     my $foo = ngx_escape_uri 'a b';
       # gives 'a%20b'
     
     my $foo = ngx_escape_uri 'a b', NGX_ESCAPE_URI;
 
-Type defines what characters to escape. 
+Type defines what characters to escape:
 
     NGX_ESCAPE_URI                " ", "#", "%", "?", 
                                   %00-%1F, %7F-%FF
@@ -468,6 +472,32 @@ Type defines what characters to escape.
                                   %00-%1F, %7F-%FF
                                  
     NGX_ESCAPE_MEMCACHED          " ", "%", %00-%1F
+
+=head3 C<< ngx_http_time $time >>
+
+Returns C<$time> in HTTP format. Uses internal function ngx_http_time()
+from F<src/core/ngx_times.c>.
+
+    my $tomorrow = ngx_http_time time + 86400;
+        # $tomorrow = 'Tue, 03 Apr 2012 20:14:41 GMT';
+
+=head3 C<< ngx_http_cookie_time $time >>
+
+Returns C<$time> in HTTP format suitable for Set-Cookie header. Uses 
+internal function ngx_http_cookie_time() from F<src/core/ngx_times.c>.
+
+    my $tomorrow = ngx_http_time time + 86400;
+        # $tomorrow = 'Tue, 03-Apr-12 20:14:41 GMT';
+
+=head3 C<< ngx_http_parse_time $str >>
+
+Parses C<$str> and returns timestamp. On error returns C<undef>. Uses
+internal function ngx_http_parse_time() from F<src/http/ngx_http_parse_time.c>.
+
+    my $time = ngx_http_parse_time "Thu, 01 Jan 1970 00:00:00 GMT"
+        or die "Cannot parse time\n";
+    
+          # $time = '0'
 
 =head1 HTTP API
 
