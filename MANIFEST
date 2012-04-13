@@ -1,5 +1,6 @@
 CHANGES
 t
+t/03-http_client.t
 t/21-time-functions.t
 t/11-server_tokens.t
 t/20-uri-escape.t
