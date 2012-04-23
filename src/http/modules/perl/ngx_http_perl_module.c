@@ -4,6 +4,11 @@
  * Copyright (C) Nginx, Inc.
  */
 
+/* TODO
+    - fix debug messages;
+    - cleanup reader/writer, avoid ngx_perl_read/write for AGAIN calls;
+*/
+
 
 #include <ngx_config.h>
 #include <ngx_core.h>
@@ -2404,7 +2409,7 @@ ngx_perl_write(ngx_connection_t *c)
     c->write->handler = ngx_perl_write_handler;
 
     if (c->write->ready) {
-        c->write->handler(c->write);
+        ngx_post_event(c->write, &ngx_posted_events);
         return;
     }
 
@@ -2704,6 +2709,24 @@ AGAIN:
                 goto CALLBACK;
             }
 
+            if (!c->read->timer_set) {
+
+                if (plc->read_timeout != NULL  && 
+                    SvOK  (plc->read_timeout)  && 
+                    SvIV  (plc->read_timeout) >= 0) 
+                {
+                    ngx_add_timer(c->read, SvIV(plc->read_timeout) * 1000);
+
+                } else {
+
+                    ngx_log_error(NGX_LOG_ERR, c->log, 0,
+                        "ngx_perl_read_handler: "
+                        "incorrent read timeout, using 15 s instead");
+
+                    ngx_add_timer(c->read, 15000);
+                }
+            }
+
             return;
         }
 
@@ -2853,6 +2876,24 @@ AGAIN:
             if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
                 errno = NGX_PERL_EBADE;
                 goto CALLBACK;
+            }
+
+            if (!c->write->timer_set) {
+
+                if (plc->write_timeout != NULL  && 
+                    SvOK  (plc->write_timeout)  && 
+                    SvIV  (plc->write_timeout) >= 0) 
+                {
+                    ngx_add_timer(c->write, SvIV(plc->write_timeout) * 1000);
+
+                } else {
+
+                    ngx_log_error(NGX_LOG_ERR, c->log, 0,
+                        "ngx_perl_write_handler: "
+                        "incorrent write timeout, using 15 s instead");
+
+                    ngx_add_timer(c->write, 15000);
+                }
             }
 
             return;

@@ -292,6 +292,17 @@ eg/helloworld/conf
 eg/helloworld/conf/nginx-perl.conf
 eg/helloworld/lib
 eg/helloworld/lib/Helloworld.pm
+eg/websockets
+eg/websockets/logs
+eg/websockets/logs/.exists
+eg/websockets/conf
+eg/websockets/conf/nginx-perl.conf
+eg/websockets/lib
+eg/websockets/lib/Here
+eg/websockets/lib/Here/Template.pm
+eg/websockets/lib/Websockets
+eg/websockets/lib/Websockets/Draw.pm
+eg/websockets/lib/Websockets/Echo.pm
 eg/http-client
 eg/http-client/logs
 eg/http-client/logs/.exists
