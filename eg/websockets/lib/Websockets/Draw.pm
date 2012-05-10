@@ -301,6 +301,10 @@ $buf = <<'TMPL';
 
         ev.preventDefault();
 
+        if (ev.which && ev.which != 1) {
+            return;
+        }
+
         if (x > 5 || y > 5) {
             mdown = 1;
             xx = x;
@@ -407,7 +411,7 @@ sub parse_ws_frames_v13 ($$) {
     my ($buf, $out) = (\$_[0], $_[1]);
     my $total = 0;
 
-    while (length($buf) - $total >= 2) {
+    while (length($$buf) - $total >= 2) {
         my ($c0, $c1) = unpack "CC", substr($$buf, $total, 2);
         my $hlen = 2;
         my $fin = ($c0 & 0x80) >> 7;

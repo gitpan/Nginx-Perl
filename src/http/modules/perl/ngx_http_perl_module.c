@@ -5,8 +5,14 @@
  */
 
 /* TODO
+    - separate tests for reader, writer, connector, timer; 
+      use the same layout for resolver's test as well;
+
+    - RVs as buffers, can save some memcpy, sometimes a lot;
     - fix debug messages;
-    - cleanup reader/writer, avoid ngx_perl_read/write for AGAIN calls;
+    - eader/writer: avoid ngx_perl_read/write for EAGAIN calls;
+    - cleanup timer, Newz on ngx_event_t instead of allocating 
+      new connectiion;
 */
 
 
@@ -131,6 +137,13 @@ static ngx_command_t  ngx_http_perl_commands[] = {
       NULL },
 
     { ngx_string("perl_handler"),
+      NGX_HTTP_LOC_CONF|NGX_HTTP_LMT_CONF|NGX_CONF_TAKE1,
+      ngx_http_perl,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      0,
+      NULL },
+
+    { ngx_string("perl_content"),
       NGX_HTTP_LOC_CONF|NGX_HTTP_LMT_CONF|NGX_CONF_TAKE1,
       ngx_http_perl,
       NGX_HTTP_LOC_CONF_OFFSET,

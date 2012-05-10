@@ -45,10 +45,11 @@ use warnings;
 no  warnings 'uninitialized';
 use bytes;
 
-our $VERSION   = '1.2.0.4';
+our $VERSION   = '1.2.0.5';
 
 use Config;
 use IO::Socket;
+use File::Path qw(rmtree);
 sub CRLF { "\x0d\x0a" }
 
 
@@ -277,6 +278,12 @@ config and packages specified as string scalars. Dies on errors.
 sub prepare_nginx_dir_die {
     my ($dir, $conf, @pkgs) = @_;
 
+    foreach ("$dir/html") {
+        if (-e $_) {
+            rmtree "$dir/html", 0, 0;
+        }
+    }
+
     foreach ("$dir", "$dir/conf", "$dir/lib", "$dir/logs", "$dir/html") {
         if (!-e $_) {
             mkdir $_
@@ -320,6 +327,23 @@ sub prepare_nginx_dir_die {
                        get_nginx_incs (undef, $dir);
           # injecting proper @INC
         $conf =~ s/(\s+http\s*{)/$1\n$incs\n/gs;
+
+          # injecting testing defaults
+        if ($conf !~ /events/) {
+            $conf = "events { worker_connections 128; }\n$conf";
+        }
+        if ($conf !~ /error_log/) {
+            $conf = "error_log logs/error.log debug;\n$conf";
+        }
+        if ($conf !~ /master_process/) {
+            $conf = "master_process off;\n$conf";
+        }
+        if ($conf !~ /daemon/) {
+            $conf = "daemon off;\n$conf";
+        }
+        if ($conf !~ /worker_processes/) {
+            $conf = "worker_processes 1;\n$conf";
+        }
 
         open my $fh, '>', "$dir/conf/nginx-perl.conf"
             or die "Cannot open file '$dir/conf/nginx-perl.conf' " .
@@ -597,8 +621,8 @@ sub get_nginx_incs ($$) {
         $prefix = join '/', map { '..' } split /\/+/, $path;
     }
     
-    return map {  m!^/! ? $_ : "$prefix/$_"  } 
-             ('blib/lib', 'blib/arch', @INC);
+    return ( 'lib', map {  m!^/! ? $_ : "$prefix/$_"  } 
+                     ('blib/lib', 'blib/arch', @INC)    );
 }
 
 
