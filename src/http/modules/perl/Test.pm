@@ -1,5 +1,8 @@
 package Nginx::Test;
 
+our $VERSION = '1.2.1.5';
+
+
 =head1 NAME
 
 Nginx::Test - testing framework for nginx-perl and nginx
@@ -44,8 +47,6 @@ use strict;
 use warnings;
 no  warnings 'uninitialized';
 use bytes;
-
-our $VERSION   = '1.2.0.5';
 
 use Config;
 use IO::Socket;
@@ -278,13 +279,18 @@ config and packages specified as string scalars. Dies on errors.
 sub prepare_nginx_dir_die {
     my ($dir, $conf, @pkgs) = @_;
 
-    foreach ("$dir/html") {
+    foreach ("$dir/html", "$dir/data") {
         if (-e $_) {
-            rmtree "$dir/html", 0, 0;
+            rmtree $_, 0, 0;
         }
     }
 
-    foreach ("$dir", "$dir/conf", "$dir/lib", "$dir/logs", "$dir/html") {
+    foreach ("$dir", 
+             "$dir/conf", 
+             "$dir/lib", 
+             "$dir/logs", 
+             "$dir/html", 
+             "$dir/data") {
         if (!-e $_) {
             mkdir $_
                 or die "Cannot create directory '$_': $!";

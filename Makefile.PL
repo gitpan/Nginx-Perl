@@ -2,6 +2,12 @@
 
 # Copyright 2011 Alexandr Gomoliako
 
+# TODO
+#  - by default build with all core modules that don't have external 
+#    dependencies;
+#  - honour PREFIX from PERL_MM_OPT;
+#  - use $ENV{AUTOMATED_TESTING} to detect cpantesters/travis;
+
 use strict;
 
 use Config;
