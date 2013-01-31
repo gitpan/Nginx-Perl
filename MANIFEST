@@ -354,6 +354,7 @@ auto/cc/icc
 auto/cc/msvc
 auto/cc/ccc
 auto/cc/bcc
+auto/cc/clang
 auto/cc/name
 auto/cc/gcc
 auto/cc/acc
